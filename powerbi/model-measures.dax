@@ -1,0 +1,969 @@
+// Measures extracted from the supplied Power BI model.
+// Each definition is a separate model measure.
+
+// Table: fact_beam_analysis
+Specimens Tested =
+
+DISTINCTCOUNT(fact_beam_analysis[specimen_id])
+
+// Table: fact_beam_analysis
+Experimental Groups =
+
+DISTINCTCOUNT(fact_beam_analysis[group_id])
+
+// Table: fact_beam_analysis
+Available Test Setups =
+
+DISTINCTCOUNT(fact_beam_analysis[test_number])
+
+// Table: fact_beam_analysis
+Test Group Combinations =
+
+COUNTROWS(
+    SUMMARIZE(
+        fact_beam_analysis,
+        fact_beam_analysis[test_number],
+        fact_beam_analysis[group_id]
+    )
+)
+
+// Table: fact_beam_analysis
+Specimens 3PT =
+
+CALCULATE(
+    [Specimens Tested],
+    KEEPFILTERS(test_setup[test_code] = "3PT")
+)
+
+// Table: fact_beam_analysis
+Specimens 4PT =
+
+CALCULATE(
+    [Specimens Tested],
+    KEEPFILTERS(test_setup[test_code] = "4PT")
+)
+
+// Table: fact_beam_analysis
+Specimens Tested Display =
+
+VAR N = [Specimens Tested]
+RETURN
+    IF(
+        ISBLANK(N),
+        "---",
+        FORMAT(N, "0")
+    )
+
+// Table: fact_beam_analysis
+Mean Flexural Load (kN) =
+
+IF(
+    HASONEVALUE(test_setup[test_code]),
+    AVERAGE(fact_beam_analysis[flexural_load_kn])
+)
+
+// Table: fact_beam_analysis
+Group Bar Color =
+
+VAR CurrentGroup =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+
+VAR CurrentLoad =
+    [Mean Flexural Load (kN)]
+
+VAR BambooGroups =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Load", [Mean Flexural Load (kN)]
+        ),
+        NOT(reinforcement_groups[group_name] IN {"VA", "VCS"})
+            && NOT ISBLANK([@Load])
+    )
+
+VAR MinLoad =
+    MINX(BambooGroups, [@Load])
+
+VAR MaxLoad =
+    MAXX(BambooGroups, [@Load])
+
+VAR Position =
+    DIVIDE(CurrentLoad - MinLoad, MaxLoad - MinLoad, 1)
+
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(CurrentLoad), BLANK(),
+        CurrentGroup = "VA", "#12344F",
+        CurrentGroup = "VCS", "#A5ADB4",
+        Position >= 2 / 3, "#A7DDB5",
+        Position >= 1 / 3, "#93C5FD",
+        "#F87171"
+    )
+
+// Table: fact_beam_analysis
+Load CV =
+
+DIVIDE(
+    [Sample Load SD (kN)],
+    [Mean Flexural Load (kN)]
+)
+
+// Table: fact_beam_analysis
+Sample Load SD (kN) =
+
+IF(
+    HASONEVALUE(test_setup[test_code])
+        && COUNT(fact_beam_analysis[flexural_load_kn]) >= 2,
+    STDEV.S(fact_beam_analysis[flexural_load_kn])
+)
+
+// Table: fact_beam_analysis
+Lowest Load CV =
+
+VAR GroupsWithValues =
+    ADDCOLUMNS(
+        ALLSELECTED(reinforcement_groups),
+        "@CV", [Load CV]
+    )
+VAR LowestGroups =
+    TOPN(
+        1,
+        FILTER(GroupsWithValues, NOT ISBLANK([@CV])),
+        [@CV], ASC
+    )
+RETURN
+    IF(
+        HASONEVALUE(test_setup[test_code]),
+        CONCATENATEX(
+            LowestGroups,
+            reinforcement_groups[group_name]
+                & " | "
+                & FORMAT([@CV], "0.00%", "en-US"),
+            " / "
+        )
+    )
+
+// Table: fact_beam_analysis
+Highest Group Mean =
+
+VAR GroupsWithValues =
+    CALCULATETABLE(
+        ADDCOLUMNS(
+            ALL(reinforcement_groups),
+            "@Mean", [Mean Flexural Load (kN)]
+        ),
+        REMOVEFILTERS(reinforcement_groups)
+    )
+VAR TopGroups =
+    TOPN(
+        1,
+        FILTER(GroupsWithValues, NOT ISBLANK([@Mean])),
+        [@Mean], DESC
+    )
+RETURN
+    IF(
+        HASONEVALUE(test_setup[test_code]),
+        CONCATENATEX(
+            TopGroups,
+            reinforcement_groups[group_name]
+                & " | "
+                & FORMAT([@Mean], "0.00", "en-US")
+                & " kN",
+            " / "
+        )
+    )
+
+// Table: fact_beam_analysis
+VA Reference Load CV =
+
+IF(
+    HASONEVALUE(test_setup[test_code]),
+    CALCULATE(
+        [Load CV],
+        REMOVEFILTERS(reinforcement_groups),
+        reinforcement_groups[group_name] = "VA"
+    )
+)
+
+// Table: fact_beam_analysis
+Lowest CV Change vs VA =
+
+DIVIDE(
+    [Lowest Load CV] - [VA Reference Load CV],
+    [VA Reference Load CV]
+)
+
+// Table: fact_beam_analysis
+Highest CV Change vs VA =
+
+DIVIDE(
+    [Highest Group Mean] - [VA Reference Load CV],
+    [VA Reference Load CV]
+)
+
+// Table: fact_beam_analysis
+Highest Load CV =
+
+VAR GroupsWithValues =
+    ADDCOLUMNS(
+        ALLSELECTED(reinforcement_groups),
+        "@CV", [Load CV]
+    )
+VAR HighestGroups =
+    TOPN(
+        1,
+        FILTER(GroupsWithValues, NOT ISBLANK([@CV])),
+        [@CV], DESC
+    )
+RETURN
+    IF(
+        HASONEVALUE(test_setup[test_code]),
+        CONCATENATEX(
+            HighestGroups,
+            reinforcement_groups[group_name]
+                & " | "
+                & FORMAT([@CV], "0.00%", "en-US"),
+            " / "
+        )
+    )
+
+// Table: fact_beam_analysis
+SD Lower Bound =
+
+IF(
+    NOT ISBLANK([Sample Load SD (kN)]),
+    [Mean Flexural Load (kN)] - [Sample Load SD (kN)]
+)
+
+// Table: fact_beam_analysis
+SD Upper Bound =
+
+IF(
+    NOT ISBLANK([Sample Load SD (kN)]),
+    [Mean Flexural Load (kN)] + [Sample Load SD (kN)]
+)
+
+// Table: fact_beam_analysis
+Mechanical Chart Subtitle =
+
+VAR SelectedTest =
+    SELECTEDVALUE(test_setup[test_code])
+VAR N =
+    [Specimens per Group]
+RETURN
+    IF(
+        NOT ISBLANK(SelectedTest),
+        SelectedTest
+            & " • Mean ± sample SD"
+            & IF(
+                NOT ISBLANK(N),
+                " • n = " & FORMAT(N, "0") & " per group",
+                " • Sample size varies by group"
+            ),
+        "Select one test setup"
+    )
+
+// Table: fact_beam_analysis
+Specimens per Group =
+
+VAR Counts =
+    FILTER(
+        ADDCOLUMNS(
+            VALUES(reinforcement_groups[group_id]),
+            "@Count", [Specimens Tested]
+        ),
+        [@Count] > 0
+    )
+RETURN
+    IF(
+        COUNTROWS(Counts) > 0
+            && MINX(Counts, [@Count]) = MAXX(Counts, [@Count]),
+        MINX(Counts, [@Count])
+    )
+
+// Table: fact_beam_analysis
+Load CV Chart Subtitle =
+
+VAR SelectedTest =
+    SELECTEDVALUE(test_setup[test_code])
+RETURN
+    IF(
+        NOT ISBLANK(SelectedTest),
+        SelectedTest & " • Coefficient of variation (CV)",
+        "Select one test setup"
+    )
+
+// Table: fact_beam_analysis
+Load CV Bar Color =
+
+VAR CurrentCV =
+    [Load CV]
+VAR GroupCVs =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups),
+            "@CV", [Load CV]
+        ),
+        NOT ISBLANK([@CV])
+    )
+VAR MaximumCV =
+    MAXX(GroupCVs, [@CV])
+RETURN
+    IF(
+        NOT ISBLANK(CurrentCV),
+        IF(
+            CurrentCV = MaximumCV,
+            "#F2BE35",
+            "#A7DDB5"
+        )
+    )
+
+// Table: fact_beam_analysis
+Mean Load Bar Color =
+
+VAR CurrentGroup =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+
+VAR CurrentLoad =
+    [Mean Flexural Load (kN)]
+
+VAR BambooGroups =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups),
+            "@Load", [Mean Flexural Load (kN)]
+        ),
+        NOT(reinforcement_groups[group_name] IN {"VA", "VCS"})
+            && NOT ISBLANK([@Load])
+    )
+
+VAR MinLoad =
+    MINX(BambooGroups, [@Load])
+
+VAR MaxLoad =
+    MAXX(BambooGroups, [@Load])
+
+VAR Position =
+    DIVIDE(CurrentLoad - MinLoad, MaxLoad - MinLoad, 1)
+
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(CurrentLoad), BLANK(),
+        CurrentGroup = "VA", "#12344F",
+        CurrentGroup = "VCS", "#A5ADB4",
+        Position >= 2 / 3, "#A7DDB5",
+        Position >= 1 / 3, "#93C5FD",
+        "#F87171"
+    )
+
+// Table: fact_beam_analysis
+VA Reference Mean Load (kN) =
+
+IF(
+    HASONEVALUE(test_setup[test_code]),
+    CALCULATE(
+        [Mean Flexural Load (kN)],
+        REMOVEFILTERS(reinforcement_groups),
+        reinforcement_groups[group_name] = "VA"
+    )
+)
+
+// Table: fact_beam_analysis
+Relative Difference vs VA =
+
+VAR ReferenceMean =
+    [VA Reference Mean Load (kN)]
+VAR Difference =
+    [Load Difference vs VA (kN)]
+RETURN
+    IF(
+        NOT ISBLANK(Difference),
+        DIVIDE(
+            ABS(Difference),
+            ABS(ReferenceMean)
+        )
+    )
+
+// Table: fact_beam_analysis
+VA Comparison Subtitle =
+
+VAR SelectedTest =
+    SELECTEDVALUE(test_setup[test_code])
+RETURN
+    IF(
+        NOT ISBLANK(SelectedTest),
+        "Comparison with VA — " & SelectedTest,
+        "Select one test setup"
+    )
+
+// Table: fact_beam_analysis
+Load Difference vs VA (kN) =
+
+VAR GroupMean =
+    [Mean Flexural Load (kN)]
+VAR ReferenceMean =
+    [VA Reference Mean Load (kN)]
+RETURN
+    IF(
+        NOT ISBLANK(GroupMean)
+            && NOT ISBLANK(ReferenceMean),
+        GroupMean - ReferenceMean
+    )
+
+// Table: fact_beam_analysis
+Load Difference vs VA Display =
+
+VAR GroupName =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+VAR Difference =
+    [Load Difference vs VA (kN)]
+RETURN
+    IF(
+        NOT ISBLANK(Difference),
+        IF(
+            GroupName = "VA",
+            "REF",
+            FORMAT(Difference, "+0.00;-0.00;0.00", "en-US")
+        )
+    )
+
+// Table: fact_beam_analysis
+Relative Difference vs VA Display =
+
+VAR GroupName =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+VAR RelativeDifference =
+    [Relative Difference vs VA]
+RETURN
+    IF(
+        NOT ISBLANK(RelativeDifference),
+        IF(
+            GroupName = "VA",
+            "REF",
+            FORMAT(RelativeDifference, "0.00%", "en-US")
+        )
+    )
+
+// Table: fact_beam_analysis
+VA Change Background =
+
+VAR GroupName =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+
+VAR Difference =
+    [Load Difference vs VA (kN)]
+
+VAR GroupDifferences =
+    ADDCOLUMNS(
+        ALLSELECTED(reinforcement_groups),
+        "@Difference", [Load Difference vs VA (kN)]
+    )
+
+VAR LargestMagnitude =
+    MAXX(GroupDifferences, ABS([@Difference]))
+
+VAR Intensity =
+    DIVIDE(ABS(Difference), LargestMagnitude, 0)
+
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(Difference), BLANK(),
+        GroupName = "VA", "#E5EDF5",
+        Difference > 0 && Intensity >= 0.5, "#65B887",
+        Difference > 0, "#DDF3E5",
+        Difference < 0 && Intensity >= 0.5, "#F0A0A0",
+        Difference < 0, "#FCE4E4",
+        "#F4F6F8"
+    )
+
+// Table: fact_beam_analysis
+Key Findings Text =
+
+VAR NL = UNICHAR(10)
+VAR Gap = NL & NL
+RETURN
+    "KEY FINDINGS"
+        & NL & "All groups included"
+        & Gap
+        & "01 · Highest mean load"
+        & NL
+        & "VAB-III leads in 3PT (80.68 kN), while VA leads in 4PT (80.64 kN)."
+        & Gap
+        & "02 · Lowest variability"
+        & NL
+        & "VA has the lowest CV in 3PT (2.54%); VAB-III has the lowest in 4PT (1.72%)."
+        & Gap
+        & "03 · Highest variability"
+        & NL
+        & "VB-III has the highest CV in 3PT (16.95%); VB-IV has the highest in 4PT (22.07%)."
+        & Gap
+        & "04 · Interpretation"
+        & NL
+        & "Higher mean load does not imply lower variability. Compare groups within each test setup."
+
+// Table: fact_beam_analysis
+Finding 01 =
+
+"VAB-III leads in 3PT (80.68 kN), while VA leads in 4PT (80.64 kN)."
+
+// Table: fact_beam_analysis
+Finding 02 =
+
+"VA has the lowest CV in 3PT (2.54%); VAB-III has the lowest in 4PT (1.72%)."
+
+// Table: fact_beam_analysis
+Finding 03 =
+
+"VB-III has the highest CV in 3PT (16.95%); VB-IV has the highest in 4PT (22.07%)."
+
+// Table: fact_beam_analysis
+Key Findings HTML =
+
+VAR Navy = "#12344F"
+VAR Teal = "#008C82"
+VAR LineColor = "#CBD5E1"
+
+VAR NumberStyle =
+    "font-size:22px;font-weight:700;color:" & Teal & ";"
+
+VAR HeadingStyle =
+    "font-size:15px;font-weight:700;margin:4px 0 8px;"
+
+VAR SectionStyle =
+    "padding:14px 0;border-top:1px solid " & LineColor & ";"
+
+RETURN
+"<div style='
+    box-sizing:border-box;
+    width:100%;
+    min-height:780px;
+    padding:14px;
+    background:#FFFFFF;
+    border:1px solid " & LineColor & ";
+    border-radius:12px;
+    font-family:Segoe UI,sans-serif;
+    color:" & Navy & ";
+    font-size:14px;
+    line-height:1.45;
+    overflow-wrap:break-word;
+'>
+    <div style='
+        font-size:24px;
+        font-weight:800;
+        line-height:1.1;
+        margin-bottom:8px;
+    '>KEY<br>FINDINGS</div>
+
+    <div style='font-size:12px;margin-bottom:16px;'>
+        All groups included
+    </div>
+
+    <div style='" & SectionStyle & "'>
+        <div style='" & NumberStyle & "'>01</div>
+        <div style='" & HeadingStyle & "'>Highest mean load</div>
+        <div>
+            VAB-III leads in 3PT (<b>80.68 kN</b>),
+            while VA leads in 4PT (<b>80.64 kN</b>).
+        </div>
+    </div>
+
+    <div style='" & SectionStyle & "'>
+        <div style='" & NumberStyle & "'>02</div>
+        <div style='" & HeadingStyle & "'>Lowest variability</div>
+        <div>
+            VA has the lowest CV in 3PT (<b>2.54%</b>);
+            VAB-III has the lowest in 4PT (<b>1.72%</b>).
+        </div>
+    </div>
+
+    <div style='" & SectionStyle & "'>
+        <div style='" & NumberStyle & "'>03</div>
+        <div style='" & HeadingStyle & "'>Highest variability</div>
+        <div>
+            VB-III has the highest CV in 3PT (<b>16.95%</b>);
+            VB-IV has the highest in 4PT (<b>22.07%</b>).
+        </div>
+    </div>
+
+    <div style='" & SectionStyle & "'>
+        <div style='" & NumberStyle & "'>04</div>
+        <div style='" & HeadingStyle & "'>Interpretation</div>
+        <div>
+            Higher mean load does not imply lower variability.
+            Compare groups within each test setup.
+        </div>
+    </div>
+</div>"
+
+// Table: fact_beam_analysis
+Mean Cost (BRL) =
+
+AVERAGE(fact_beam_analysis[cost_brl])
+
+// Table: fact_beam_analysis
+VA Reference Cost (BRL) =
+
+CALCULATE(
+    [Mean Cost (BRL)],
+    REMOVEFILTERS(reinforcement_groups),
+    reinforcement_groups[group_name] = "VA"
+)
+
+// Table: fact_beam_analysis
+Cost Savings vs VA (%) =
+
+VAR GroupCost = [Mean Cost (BRL)]
+VAR ReferenceCost = [VA Reference Cost (BRL)]
+RETURN
+    IF(
+        NOT ISBLANK(GroupCost)
+            && NOT ISBLANK(ReferenceCost),
+        DIVIDE(
+            ReferenceCost - GroupCost,
+            ReferenceCost
+        )
+    )
+
+// Table: fact_beam_analysis
+Average Reinforcement Cost =
+
+VAR CostValue = [Mean Cost (BRL)]
+RETURN
+    IF(
+        NOT ISBLANK(CostValue),
+        "R$ " & FORMAT(CostValue, "#,##0.00", "en-US"),
+        "—"
+    )
+
+// Table: fact_beam_analysis
+Lowest Reinforcement Cost =
+
+VAR GroupsWithCost =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Cost", CALCULATE([Mean Cost (BRL)]),
+            "@Count", CALCULATE([Specimens Tested])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && [@Count] > 0
+            && NOT ISBLANK([@Cost])
+    )
+VAR LowestGroup =
+    TOPN(
+        1,
+        GroupsWithCost,
+        [@Cost], ASC,
+        reinforcement_groups[group_name], ASC
+    )
+RETURN
+    IF(
+        COUNTROWS(LowestGroup) = 0,
+        "—",
+        CONCATENATEX(
+            LowestGroup,
+            reinforcement_groups[group_name]
+                & " | R$ "
+                & FORMAT([@Cost], "#,##0.00", "en-US"),
+            ""
+        )
+    )
+
+// Table: fact_beam_analysis
+Best Bambo Load/Cost ratio =
+
+VAR Candidates =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Load", CALCULATE([Mean Flexural Load (kN)]),
+            "@Cost", CALCULATE([Mean Cost (BRL)])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && [@Load] > 0
+            && [@Cost] > 0
+    )
+VAR WithRatio =
+    ADDCOLUMNS(
+        Candidates,
+        "@Ratio", DIVIDE([@Load], [@Cost])
+    )
+VAR Winner =
+    TOPN(
+        1,
+        WithRatio,
+        [@Ratio], DESC,
+        [@Cost], ASC,
+        reinforcement_groups[group_name], ASC
+    )
+RETURN
+    IF(
+        NOT HASONEVALUE(test_setup[test_code]),
+        "Select 3PT or 4PT",
+        IF(
+            COUNTROWS(Winner) = 0,
+            "—",
+            CONCATENATEX(
+                Winner,
+                reinforcement_groups[group_name]
+                    & " | "
+                    & FORMAT([@Ratio], "0.00", "en-US")
+                    & " kN/BRL",
+                ""
+            )
+        )
+    )
+
+// Table: fact_beam_analysis
+Top Bamboo Candidate Group =
+
+VAR Candidates =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Load", CALCULATE([Mean Flexural Load (kN)])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && [@Load] > 0
+    )
+VAR Winner =
+    TOPN(
+        1,
+        Candidates,
+        [@Load], DESC,
+        reinforcement_groups[group_name], ASC
+    )
+RETURN
+    IF(
+        HASONEVALUE(test_setup[test_code]),
+        CONCATENATEX(
+            Winner,
+            reinforcement_groups[group_name]
+                & " | "
+                & FORMAT([@Load], "0.00", "en-US")
+                & " kN",
+            ""
+        )
+    )
+
+// Table: fact_beam_analysis
+Top Bamboo Candidate =
+
+IF(
+    NOT HASONEVALUE(test_setup[test_code]),
+    "Select 3PT or 4PT",
+    COALESCE([Top Bamboo Candidate Group], "—")
+)
+
+// Table: fact_beam_analysis
+Cost Savings vs VA =
+
+VAR CandidateLabel =
+    [Best Bambo Load/Cost ratio]
+VAR SeparatorPosition =
+    SEARCH(" | ", CandidateLabel, 1, 0)
+VAR CandidateGroup =
+    IF(
+        SeparatorPosition > 0,
+        LEFT(CandidateLabel, SeparatorPosition - 1)
+    )
+VAR CandidateCost =
+    CALCULATE(
+        [Mean Cost (BRL)],
+        REMOVEFILTERS(reinforcement_groups),
+        reinforcement_groups[group_name] = CandidateGroup
+    )
+VAR ReferenceCost =
+    CALCULATE(
+        [Mean Cost (BRL)],
+        REMOVEFILTERS(reinforcement_groups),
+        reinforcement_groups[group_name] = "VA"
+    )
+VAR CostChange =
+    IF(
+        NOT ISBLANK(CandidateCost)
+            && ReferenceCost > 0,
+        DIVIDE(
+            CandidateCost - ReferenceCost,
+            ReferenceCost
+        )
+    )
+RETURN
+    IF(
+        NOT HASONEVALUE(test_setup[test_code]),
+        "Select 3PT or 4PT",
+        IF(
+            ISBLANK(CandidateGroup)
+                || ISBLANK(CostChange),
+            "—",
+            CandidateGroup
+                & " | "
+                & FORMAT(
+                    CostChange,
+                    "+0.00%;-0.00%;0.00%",
+                    "en-US"
+                )
+        )
+    )
+
+// Table: fact_beam_analysis
+Scatter Label =
+
+VAR MeanLoad = [Mean Flexural Load (kN)]
+VAR MeanCost = [Mean Cost (BRL)]
+RETURN
+    IF(
+        NOT ISBLANK(MeanLoad)
+            && NOT ISBLANK(MeanCost),
+        "("
+            & FORMAT(MeanLoad, "0.00", "en-US")
+            & " ; "
+            & FORMAT(MeanCost, "0.00", "en-US")
+            & ")"
+    )
+
+// Table: fact_beam_analysis
+Scatter Color =
+
+VAR CurrentGroup =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+VAR CurrentLoad =
+    [Mean Flexural Load (kN)]
+VAR CurrentCost =
+    [Mean Cost (BRL)]
+VAR CurrentRatio =
+    IF(
+        CurrentCost > 0,
+        DIVIDE(CurrentLoad, CurrentCost)
+    )
+VAR Candidates =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Load", CALCULATE([Mean Flexural Load (kN)]),
+            "@Cost", CALCULATE([Mean Cost (BRL)])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && [@Load] > 0
+            && [@Cost] > 0
+    )
+VAR BestRatio =
+    MAXX(
+        Candidates,
+        DIVIDE([@Load], [@Cost])
+    )
+RETURN
+    SWITCH(
+        TRUE(),
+        CurrentGroup IN { "VA", "VCS" }, "#93C5FD",
+        NOT ISBLANK(CurrentRatio)
+            && NOT ISBLANK(BestRatio)
+            && ABS(CurrentRatio - BestRatio) < 0.000000001,
+            "#58A66A",
+        "#F2B880"
+    )
+
+// Table: fact_beam_analysis
+Load-to-Cost Ratio (kN per BRL) =
+
+VAR MeanCost =
+    [Mean Cost (BRL)]
+RETURN
+    IF(
+        MeanCost > 0,
+        DIVIDE(
+            [Mean Flexural Load (kN)],
+            MeanCost
+        )
+    )
+
+// Table: fact_beam_analysis
+Load Cost Ratio Color =
+
+VAR CurrentGroup =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+VAR CurrentRatio =
+    [Load-to-Cost Ratio (kN per BRL)]
+VAR BambooGroups =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Ratio",
+                CALCULATE([Load-to-Cost Ratio (kN per BRL)])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && NOT ISBLANK([@Ratio])
+    )
+VAR MinRatio =
+    MINX(BambooGroups, [@Ratio])
+VAR MaxRatio =
+    MAXX(BambooGroups, [@Ratio])
+VAR Position =
+    DIVIDE(
+        CurrentRatio - MinRatio,
+        MaxRatio - MinRatio,
+        1
+    )
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(CurrentRatio), BLANK(),
+        CurrentGroup = "VA", "#12344F",
+        CurrentGroup = "VCS", "#A5A9AD",
+        Position >= 2 / 3, "#008C82",
+        Position >= 1 / 3, "#65B887",
+        "#BDE8CF"
+    )
+
+// Table: fact_beam_analysis
+Reinforcement Cost Bar Color =
+
+VAR CurrentGroup =
+    SELECTEDVALUE(reinforcement_groups[group_name])
+VAR CurrentCost =
+    [Mean Cost (BRL)]
+VAR BambooGroups =
+    FILTER(
+        ADDCOLUMNS(
+            ALLSELECTED(reinforcement_groups[group_name]),
+            "@Cost", CALCULATE([Mean Cost (BRL)])
+        ),
+        NOT (
+            reinforcement_groups[group_name] IN { "VA", "VCS" }
+        )
+            && NOT ISBLANK([@Cost])
+    )
+VAR MinCost =
+    MINX(BambooGroups, [@Cost])
+VAR MaxCost =
+    MAXX(BambooGroups, [@Cost])
+VAR Position =
+    DIVIDE(
+        CurrentCost - MinCost,
+        MaxCost - MinCost,
+        0.5
+    )
+RETURN
+    SWITCH(
+        TRUE(),
+        ISBLANK(CurrentCost), BLANK(),
+        CurrentGroup = "VA", "#12344F",
+        CurrentGroup = "VCS", "#A5A9AD",
+        Position >= 2 / 3, "#3B82C4",
+        Position >= 1 / 3, "#80B4DD",
+        "#C4DFF2"
+    )
+
